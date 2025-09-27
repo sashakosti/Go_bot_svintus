@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -55,7 +56,7 @@ func (s *Storage) GetAllPlayers(ctx context.Context) ([]Player, error) {
 }
 
 // SaveGameResults - Сохранение результатов игры
-func (s *Storage) SaveGameResults(ctx context.Context, gameID int, results []GameResult) error {
+func (s *Storage) SaveGameResults(ctx context.Context, results []GameResult) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -66,7 +67,7 @@ func (s *Storage) SaveGameResults(ctx context.Context, gameID int, results []Gam
 		_, err := tx.Exec(ctx,
 			`INSERT INTO game_results (game_id, user_id, place, points)
 			 VALUES ($1, $2, $3, $4)`,
-			gameID, r.Player.TGID, r.Place, r.Points,
+			r.GameID, r.Player.TGID, r.Place, r.Points,
 		)
 		if err != nil {
 			return err
@@ -155,4 +156,102 @@ func (s *Storage) CheckPlayersExist(ctx context.Context, tgIDs []int64) (bool, e
 	}
 
 	return count == len(tgIDs), nil
+}
+
+// CreateRecordingSession создает новую сессию записи.
+// Если сессия для этого чата уже существует, она будет перезаписана (ON CONFLICT).
+func (s *Storage) CreateRecordingSession(ctx context.Context, chatID int64, messageID int64) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Сначала удаляем старую сессию, если она есть, чтобы очистить связанных игроков
+	_, err = tx.Exec(ctx, "DELETE FROM recording_sessions WHERE chat_id = $1", chatID)
+	if err != nil {
+		return err
+	}
+
+	// Создаем новую сессию
+	_, err = tx.Exec(ctx,
+		"INSERT INTO recording_sessions (chat_id, message_id) VALUES ($1, $2)",
+		chatID, messageID,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// GetRecordingSession возвращает активную сессию записи для чата.
+func (s *Storage) GetRecordingSession(ctx context.Context, chatID int64) (*RecordingSession, error) {
+	var session RecordingSession
+	err := s.db.QueryRow(ctx,
+		"SELECT chat_id, message_id FROM recording_sessions WHERE chat_id = $1",
+		chatID,
+	).Scan(&session.ChatID, &session.MessageID)
+
+	if err == pgx.ErrNoRows {
+		return nil, nil // Сессии не существует
+	}
+	return &session, err
+}
+
+// AddPlayerToSession добавляет игрока в сессию записи.
+func (s *Storage) AddPlayerToSession(ctx context.Context, chatID int64, playerTgID int64) error {
+	// Определяем следующее место (place)
+	var nextPlace int
+	err := s.db.QueryRow(ctx,
+		"SELECT COALESCE(MAX(place), 0) + 1 FROM session_players WHERE session_chat_id = $1",
+		chatID,
+	).Scan(&nextPlace)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(ctx,
+		"INSERT INTO session_players (session_chat_id, player_tg_id, place) VALUES ($1, $2, $3)",
+		chatID, playerTgID, nextPlace,
+	)
+	return err
+}
+
+// GetSessionPlayers возвращает всех игроков в сессии в правильном порядке.
+func (s *Storage) GetSessionPlayers(ctx context.Context, chatID int64) ([]Player, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT p.tg_id, p.username, p.display_name, p.score
+		 FROM session_players sp
+		 JOIN players p ON sp.player_tg_id = p.tg_id
+		 WHERE sp.session_chat_id = $1
+		 ORDER BY sp.place ASC`,
+		chatID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var players []Player
+	for rows.Next() {
+		var p Player
+		if err := rows.Scan(&p.TGID, &p.Username, &p.DisplayName, &p.Score); err != nil {
+			return nil, err
+		}
+		players = append(players, p)
+	}
+	return players, nil
+}
+
+// DeleteRecordingSession удаляет сессию записи и всех связанных с ней игроков.
+func (s *Storage) DeleteRecordingSession(ctx context.Context, chatID int64) error {
+	_, err := s.db.Exec(ctx, "DELETE FROM recording_sessions WHERE chat_id = $1", chatID)
+	return err
+}
+
+// ResetPlayerScore сбрасывает очки игрока до 0.
+func (s *Storage) ResetPlayerScore(ctx context.Context, tgID int64) error {
+	_, err := s.db.Exec(ctx, "UPDATE players SET score = 0 WHERE tg_id = $1", tgID)
+	return err
 }
