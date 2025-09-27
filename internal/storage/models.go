@@ -18,3 +18,15 @@ type GameResult struct {
 	Points int // очки за игру
 	Date   time.Time
 }
+
+// RecordingSession представляет активную сессию записи результатов.
+type RecordingSession struct {
+	ChatID    int64
+	MessageID int64
+}
+
+// SessionPlayer представляет игрока, добавленного в сессию записи.
+type SessionPlayer struct {
+	Player Player
+	Place  int
+}
