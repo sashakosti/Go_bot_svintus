@@ -130,3 +130,29 @@ func (s *Storage) GetPlayerByTGID(ctx context.Context, tgID int64) (*Player, err
 func (s *Storage) Ping() error {
 	return s.db.Ping(context.Background())
 }
+
+// CreateGame создает новую игру и возвращает ее ID.
+func (s *Storage) CreateGame(ctx context.Context) (int, error) {
+	var gameID int
+	err := s.db.QueryRow(ctx, "INSERT INTO games (created_at) VALUES (NOW()) RETURNING id").Scan(&gameID)
+	return gameID, err
+}
+
+// CheckPlayersExist проверяет, что все игроки с переданными tgID существуют в базе.
+func (s *Storage) CheckPlayersExist(ctx context.Context, tgIDs []int64) (bool, error) {
+	if len(tgIDs) == 0 {
+		return true, nil // Нет игроков для проверки
+	}
+
+	var count int
+	err := s.db.QueryRow(ctx,
+		"SELECT COUNT(*) FROM players WHERE tg_id = ANY($1)",
+		tgIDs,
+	).Scan(&count)
+
+	if err != nil {
+		return false, err
+	}
+
+	return count == len(tgIDs), nil
+}
