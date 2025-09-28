@@ -102,7 +102,9 @@ func (b *Bot) Start() {
 			}
 			// Answer callback query so the loading icon on the button disappears
 			callbackResp := tgbotapi.NewCallback(callback.ID, "")
-			b.bot.Request(callbackResp)
+			if _, err := b.bot.Request(callbackResp); err != nil {
+				log.Printf("Failed to send callback request: %v", err)
+			}
 		}
 	}
 }

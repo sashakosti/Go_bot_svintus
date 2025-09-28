@@ -32,10 +32,10 @@ func NewHandler(bot MessageSender, service service.GameServiceInterface) *Handle
 func (h *Handler) HandleJoin(chatID int64, user *tgbotapi.User) {
 	err := h.Service.RegisterPlayer(user.ID, user.UserName, user.FirstName)
 	if err != nil {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Не удалось зарегистрироваться 😅"))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Не удалось зарегистрироваться 😅"))
 		return
 	}
-	h.Bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("%s присоединился к игре!", user.FirstName)))
+	sendMessage(h.Bot, tgbotapi.NewMessage(chatID, fmt.Sprintf("%s присоединился к игре!", user.FirstName)))
 }
 
 // HandleRecordStart - начинает интерактивную запись результатов игры
@@ -43,12 +43,12 @@ func (h *Handler) HandleRecordStart(msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 	allPlayers, err := h.Service.GetAllPlayers()
 	if err != nil {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Не удалось получить список игроков 😅"))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Не удалось получить список игроков 😅"))
 		return
 	}
 
 	if len(allPlayers) == 0 {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Пока нет ни одного зарегистрированного игрока. Используйте /join."))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Пока нет ни одного зарегистрированного игрока. Используйте /join."))
 		return
 	}
 
@@ -66,7 +66,7 @@ func (h *Handler) HandleRecordStart(msg *tgbotapi.Message) {
 	err = h.Service.StartRecordingSession(chatID, int64(sentMsg.MessageID))
 	if err != nil {
 		log.Printf("Failed to start recording session: %v", err)
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Не удалось начать сессию записи. Попробуйте еще раз."))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Не удалось начать сессию записи. Попробуйте еще раз."))
 	}
 }
 
@@ -75,12 +75,14 @@ func (h *Handler) HandleRecordCallback(callback *tgbotapi.CallbackQuery) {
 	chatID := callback.Message.Chat.ID
 	data := callback.Data
 
-	h.Bot.Request(tgbotapi.NewCallback(callback.ID, ""))
+	if _, err := h.Bot.Request(tgbotapi.NewCallback(callback.ID, "")); err != nil {
+		log.Printf("Failed to send callback request: %v", err)
+	}
 
 	session, err := h.Service.GetRecordingSession(chatID)
 	if err != nil {
 		if errors.Is(err, service.ErrSessionNotFound) {
-			h.Bot.Send(tgbotapi.NewMessage(chatID, "Сессия записи истекла, начните заново с /record."))
+			sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Сессия записи истекла, начните заново с /record."))
 		} else {
 			log.Printf("Error getting session: %v", err)
 		}
@@ -104,7 +106,7 @@ func (h *Handler) handleRecordingCancel(callback *tgbotapi.CallbackQuery) {
 		log.Printf("Failed to cancel recording: %v", err)
 	}
 	editMsg := tgbotapi.NewEditMessageText(chatID, callback.Message.MessageID, "Запись отменена.")
-	h.Bot.Send(editMsg)
+	sendMessage(h.Bot, editMsg)
 }
 
 // handleRecordingFinish обрабатывает завершение записи.
@@ -113,13 +115,13 @@ func (h *Handler) handleRecordingFinish(callback *tgbotapi.CallbackQuery) {
 
 	winners, err := h.Service.FinishRecording(chatID)
 	if err != nil {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при сохранении результатов. Попробуйте еще раз."))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Ошибка при сохранении результатов. Попробуйте еще раз."))
 		log.Printf("RecordGame error: %v", err)
 		return
 	}
 
 	if len(winners) == 0 {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Вы не выбрали ни одного игрока."))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Вы не выбрали ни одного игрока."))
 		return
 	}
 
@@ -128,7 +130,7 @@ func (h *Handler) handleRecordingFinish(callback *tgbotapi.CallbackQuery) {
 		resultText += fmt.Sprintf("%d. %s\n", i+1, p.DisplayName)
 	}
 	editMsg := tgbotapi.NewEditMessageText(chatID, callback.Message.MessageID, resultText)
-	h.Bot.Send(editMsg)
+	sendMessage(h.Bot, editMsg)
 }
 
 // handlePlayerSelection обрабатывает выбор игрока.
@@ -143,13 +145,13 @@ func (h *Handler) handlePlayerSelection(callback *tgbotapi.CallbackQuery, sessio
 	sessionPlayers, err := h.Service.AddPlayerToRecording(chatID, selectedPlayerID)
 	if err != nil {
 		log.Printf("Failed to add player to recording: %v", err)
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Произошла ошибка при добавлении игрока."))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Произошла ошибка при добавлении игрока."))
 		return
 	}
 
 	allPlayers, err := h.Service.GetAllPlayers()
 	if err != nil {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Не удалось обновить список игроков. 😥"))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Не удалось обновить список игроков. 😥"))
 		return
 	}
 	newKeyboard := h.buildPlayersKeyboard(allPlayers, sessionPlayers)
@@ -161,9 +163,8 @@ func (h *Handler) handlePlayerSelection(callback *tgbotapi.CallbackQuery, sessio
 	winnerText += fmt.Sprintf("\nКто занял %d-е место?", len(sessionPlayers)+1)
 
 	editMsg := tgbotapi.NewEditMessageTextAndMarkup(chatID, int(session.MessageID), winnerText, newKeyboard)
-	h.Bot.Send(editMsg)
+	sendMessage(h.Bot, editMsg)
 }
-
 
 // buildPlayersKeyboard создает клавиатуру с игроками, исключая уже выбранных.
 func (h *Handler) buildPlayersKeyboard(all, selected []storage.Player) tgbotapi.InlineKeyboardMarkup {
@@ -177,8 +178,7 @@ func (h *Handler) buildPlayersKeyboard(all, selected []storage.Player) tgbotapi.
 	for _, p := range all {
 		if !selectedIDs[p.TGID] {
 			button := tgbotapi.NewInlineKeyboardButtonData(p.DisplayName, fmt.Sprintf("record_select_%d", p.TGID))
-		
-rows = append(rows, tgbotapi.NewInlineKeyboardRow(button))
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(button))
 		}
 	}
 
@@ -190,7 +190,7 @@ rows = append(rows, tgbotapi.NewInlineKeyboardRow(button))
 	cancelButton := tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "record_cancel")
 	controlButtons = append(controlButtons, cancelButton)
 
-rows = append(rows, controlButtons)
+	rows = append(rows, controlButtons)
 
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
@@ -199,28 +199,29 @@ rows = append(rows, controlButtons)
 func (h *Handler) HandleLeaderboard(chatID int64) {
 	leaderboard, err := h.Service.GetLeaderboard()
 	if err != nil {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Не удалось получить рейтинг 😅"))
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Не удалось получить рейтинг 😅"))
 		return
 	}
 
 	text := "🏆 Рейтинг игроков:\n"
 	for i, p := range leaderboard {
-		text += fmt.Sprintf("%d. %s — %d очков\n", i+1, p.DisplayName, p.Score)
+		word := Pluralize(p.Score, [3]string{"очко", "очка", "очков"})
+		text += fmt.Sprintf("%d. %s — %d %s\n", i+1, p.DisplayName, p.Score, word)
 	}
 
-	h.Bot.Send(tgbotapi.NewMessage(chatID, text))
+	sendMessage(h.Bot, tgbotapi.NewMessage(chatID, text))
 }
 
 // HandleMyScore - узнать индивидуальные очки
 func (h *Handler) HandleMyScore(chatID int64, user *tgbotapi.User) {
 	score, err := h.Service.GetPlayerScore(user.ID)
 	if err != nil {
-		h.Bot.Send(tgbotapi.NewMessage(chatID, "Не удалось получить очки 😅"))
-		log.Printf("[MyScore] failed for %s: %v", user.UserName, err)
+		sendMessage(h.Bot, tgbotapi.NewMessage(chatID, "Не удалось получить очки 😅"))
+		log.Printf("[Score] failed for %s: %v", user.UserName, err)
 		return
 	}
-	h.Bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("%s, у тебя %d очков", user.FirstName, score)))
-	log.Printf("[MyScore] %s has %d points", user.UserName, score)
+	sendMessage(h.Bot, tgbotapi.NewMessage(chatID, fmt.Sprintf("%s, у тебя %d очков", user.FirstName, score)))
+	log.Printf("[Score] %s has %d points", user.UserName, score)
 }
 
 var commandsKeyboard = tgbotapi.NewInlineKeyboardMarkup(
@@ -242,5 +243,5 @@ func (h *Handler) HandleHelp(msg *tgbotapi.Message) {
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, text)
 	reply.ReplyMarkup = commandsKeyboard
-	h.Bot.Send(reply)
+	sendMessage(h.Bot, reply)
 }
